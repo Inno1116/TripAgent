@@ -1,0 +1,125 @@
+{
+  "index": "rag_chunks",
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "rag_text": {
+          "type": "standard",
+          "stopwords": "_none_"
+        }
+      }
+    },
+    "number_of_shards": 3,
+    "number_of_replicas": 1
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "chunk_id": {
+        "type": "keyword"
+      },
+      "tenant_id": {
+        "type": "keyword"
+      },
+      "user_id": {
+        "type": "keyword"
+      },
+      "kb_id": {
+        "type": "keyword"
+      },
+      "doc_id": {
+        "type": "keyword"
+      },
+      "doc_version": {
+        "type": "keyword"
+      },
+      "chunk_index": {
+        "type": "integer"
+      },
+      "content_hash": {
+        "type": "keyword"
+      },
+      "source_type": {
+        "type": "keyword"
+      },
+      "source_uri": {
+        "type": "keyword",
+        "ignore_above": 2048
+      },
+      "title": {
+        "type": "text",
+        "analyzer": "rag_text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 512
+          }
+        }
+      },
+      "section_path": {
+        "type": "text",
+        "analyzer": "rag_text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 1024
+          }
+        }
+      },
+      "chunk_text": {
+        "type": "text",
+        "analyzer": "rag_text",
+        "term_vector": "with_positions_offsets"
+      },
+      "keywords": {
+        "type": "keyword"
+      },
+      "summary": {
+        "type": "text",
+        "analyzer": "rag_text"
+      },
+      "entities": {
+        "type": "keyword"
+      },
+      "page_start": {
+        "type": "integer"
+      },
+      "page_end": {
+        "type": "integer"
+      },
+      "char_start": {
+        "type": "integer"
+      },
+      "char_end": {
+        "type": "integer"
+      },
+      "language": {
+        "type": "keyword"
+      },
+      "tags": {
+        "type": "keyword"
+      },
+      "visibility": {
+        "type": "keyword"
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      },
+      "embedding_model": {
+        "type": "keyword"
+      },
+      "embedding_version": {
+        "type": "keyword"
+      },
+      "schema_version": {
+        "type": "integer"
+      },
+      "is_active": {
+        "type": "boolean"
+      }
+    }
+  }
+}

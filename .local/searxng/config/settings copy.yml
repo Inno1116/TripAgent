@@ -1,0 +1,54 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - baidu
+      - sogou
+      - duckduckgo
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "kyuri-dev-change-me"
+  limiter: false
+  public_instance: false
+
+search:
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: "baidu"
+  default_lang: "zh-CN"
+
+engines:
+  - name: bing
+    timeout: 15.0
+    disabled: false
+
+  - name: baidu
+    timeout: 15.0
+    disabled: false
+
+  - name: sogou
+    timeout: 15.0
+    disabled: false
+
+  - name: duckduckgo
+    timeout: 15.0
+    disabled: false
+
+outgoing:
+  request_timeout: 15.0
+  max_request_timeout: 30.0
+  max_redirects: 5
+  pool_connections: 100
+  pool_maxsize: 100
+  keepalive_expiry: 5.0
+  retries: 1
+
+enabled_plugins:
+  - "Hash plugin"
+  - "Self Info"
+  - "Tracker URL remover"
+  - "Ahmia blacklist"

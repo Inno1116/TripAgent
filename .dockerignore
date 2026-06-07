@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.vscode
+.ruff_cache
+.pytest_cache
+.benchmarks
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.venv
+**/node_modules
+**/*.py[cod]
+**/*.log
+deploy/runtime.env
+libs/deepagents/StratRAG
+libs/deepagents/deepagents/runtime/runtime.env

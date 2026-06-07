@@ -1,0 +1,73 @@
+[project]
+name = "kyuriagents-backend"
+version = "0.1.0"
+description = "KyuriAgents backend service for RAG, memory, task planning, and web research."
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "elasticsearch>=8.12.0,<9.0.0",
+    "fastapi>=0.115.0,<1.0.0",
+    "httpx>=0.27.0,<1.0.0",
+    "langchain>=1.3.0,<2.0.0",
+    "langchain-core>=1.4.0,<2.0.0",
+    "langchain-mcp-adapters>=0.2.2,<0.3.0",
+    "langchain-openai>=1.1.0,<2.0.0",
+    "langgraph-checkpoint-postgres>=3.1.0,<4.0.0",
+    "langmem>=0.0.30,<1.0.0",
+    "playwright>=1.60.0,<2.0.0",
+    "psycopg[binary]>=3.2.0,<4.0.0",
+    "pymilvus>=2.4.0,<3.0.0",
+    "pypdf>=5.0.0,<7.0.0",
+    "redis>=5.0.0,<8.0.0",
+    "transformers>=4.40.0,<6.0.0",
+    "uvicorn[standard]>=0.30.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.12.2,<0.16.0",
+    "ty>=0.0.1,<1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=73.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+"*" = ["py.typed", "*.md", "*.example"]
+"kyuriagents.rag" = ["schemas/*.sql", "schemas/*.json", "schemas/*.md", "schemas/*.example"]
+"kyuriagents.memory" = ["schemas/*.sql", "schemas/*.md", "schemas/*.example"]
+"kyuriagents.runtime" = ["*.md", "*.example"]
+"kyuriagents.server" = ["schemas/*.sql"]
+"kyuriagents.tools" = ["schemas/*.sql"]
+
+[tool.setuptools.packages.find]
+include = ["kyuriagents*"]
+
+[tool.ruff]
+line-length = 150
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",
+    "ISC001",
+    "PERF203",
+    "SLF001",
+    "PLR0913",
+    "PLC0414",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kyuriagents"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["BLE001", "INP001", "T201"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

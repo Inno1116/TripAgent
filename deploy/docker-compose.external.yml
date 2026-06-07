@@ -1,0 +1,79 @@
+name: kyuriagents
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    ports:
+      - "${SEARXNG_PORT:-8888}:8080"
+
+  bootstrap:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    env_file:
+      - ${KYURIAGENTS_ENV_FILE:-runtime.env}
+    command: ["python", "scripts/bootstrap_runtime.py"]
+    profiles:
+      - bootstrap
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    env_file:
+      - ${KYURIAGENTS_ENV_FILE:-runtime.env}
+    volumes:
+      - uploads_data:/data/uploads
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    env_file:
+      - ${KYURIAGENTS_ENV_FILE:-runtime.env}
+    command: ["python", "scripts/ingestion_worker.py"]
+    volumes:
+      - uploads_data:/data/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        NEXT_PUBLIC_KYURIAGENTS_API_BASE: ${KYURIAGENTS_API_BASE:-/api}
+        KYURIAGENTS_INTERNAL_API_BASE: ${KYURIAGENTS_INTERNAL_API_BASE:-http://api:8000}
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:3000"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  uploads_data:

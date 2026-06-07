@@ -1,0 +1,30 @@
+{
+  "servers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "D:/Agent/Kyuriagents"
+      ],
+      "risk": "read_only",
+      "requires_confirmation": false,
+      "tags": ["local", "filesystem"]
+    },
+    "internal_api": {
+      "transport": "streamable_http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${INTERNAL_API_TOKEN}"
+      },
+      "risk": "external_read",
+      "tool_risks": {
+        "create_ticket": "write"
+      },
+      "tool_confirmation": {
+        "create_ticket": true
+      }
+    }
+  }
+}

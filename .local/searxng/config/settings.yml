@@ -1,0 +1,107 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - baidu
+      - sogou
+      - duckduckgo
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "kyuri-dev-change-me"
+  limiter: false
+  public_instance: false
+
+search:
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: "baidu"
+  default_lang: "zh-CN"
+  page_size: 20
+  max_page: 2
+
+engines:
+  # 启用国内可访问的搜索引擎
+  - name: baidu
+    engine: baidu
+    shortcut: bd
+    categories: [web, general]
+    disabled: false
+    timeout: 8.0
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    categories: [web, general, images]
+    disabled: false
+    timeout: 10.0
+    engine_params:
+      region: "zh-CN"
+
+  - name: 360搜索
+    engine: 360search
+    shortcut: so
+    categories: [web, general]
+    disabled: false
+    timeout: 8.0
+
+  - name: 搜狗
+    engine: sogou
+    shortcut: sg
+    categories: [web, general]
+    disabled: false
+    timeout: 8.0
+
+  - name: 知乎
+    engine: zhihu
+    shortcut: zh
+    categories: [web, general]
+    disabled: false
+    timeout: 8.0
+
+  - name: 哔哩哔哩
+    engine: bilibili
+    shortcut: bl
+    categories: [videos]
+    disabled: false
+    timeout: 8.0
+
+  # 禁用国内无法访问的引擎
+  - name: google
+    engine: google
+    shortcut: go
+    disabled: true
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: true
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: true
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: true
+
+
+outgoing:
+  request_timeout: 15.0
+  max_request_timeout: 30.0
+  max_redirects: 5
+  pool_connections: 100
+  pool_maxsize: 100
+  keepalive_expiry: 5.0
+  retries: 1
+
+enabled_plugins:
+  - "Hash plugin"
+  - "Self Info"
+  - "Tracker URL remover"
+  - "Ahmia blacklist"

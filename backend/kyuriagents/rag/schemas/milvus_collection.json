@@ -1,0 +1,146 @@
+{
+  "collection_name": "rag_chunks",
+  "description": "KyuriAgents RAG chunk vectors. Set embedding.dimension to the embedding model dimension before creating the collection.",
+  "embedding": {
+    "field_name": "embedding",
+    "dimension": 3072,
+    "metric_type": "COSINE",
+    "index_type": "HNSW",
+    "index_params": {
+      "M": 32,
+      "efConstruction": 200
+    },
+    "search_params": {
+      "ef": 128
+    }
+  },
+  "fields": [
+    {
+      "name": "chunk_id",
+      "type": "VARCHAR",
+      "is_primary": true,
+      "max_length": 128
+    },
+    {
+      "name": "tenant_id",
+      "type": "VARCHAR",
+      "max_length": 64
+    },
+    {
+      "name": "user_id",
+      "type": "VARCHAR",
+      "max_length": 64
+    },
+    {
+      "name": "kb_id",
+      "type": "VARCHAR",
+      "max_length": 64
+    },
+    {
+      "name": "doc_id",
+      "type": "VARCHAR",
+      "max_length": 64
+    },
+    {
+      "name": "doc_version",
+      "type": "VARCHAR",
+      "max_length": 64
+    },
+    {
+      "name": "chunk_index",
+      "type": "INT64"
+    },
+    {
+      "name": "content_hash",
+      "type": "VARCHAR",
+      "max_length": 64
+    },
+    {
+      "name": "source_type",
+      "type": "VARCHAR",
+      "max_length": 32
+    },
+    {
+      "name": "source_uri",
+      "type": "VARCHAR",
+      "max_length": 2048
+    },
+    {
+      "name": "title",
+      "type": "VARCHAR",
+      "max_length": 512
+    },
+    {
+      "name": "section_path",
+      "type": "VARCHAR",
+      "max_length": 1024
+    },
+    {
+      "name": "page_start",
+      "type": "INT64"
+    },
+    {
+      "name": "page_end",
+      "type": "INT64"
+    },
+    {
+      "name": "char_start",
+      "type": "INT64"
+    },
+    {
+      "name": "char_end",
+      "type": "INT64"
+    },
+    {
+      "name": "language",
+      "type": "VARCHAR",
+      "max_length": 16
+    },
+    {
+      "name": "tags",
+      "type": "ARRAY",
+      "element_type": "VARCHAR",
+      "max_capacity": 32,
+      "max_length": 64
+    },
+    {
+      "name": "visibility",
+      "type": "VARCHAR",
+      "max_length": 16
+    },
+    {
+      "name": "created_at",
+      "type": "VARCHAR",
+      "max_length": 32
+    },
+    {
+      "name": "updated_at",
+      "type": "VARCHAR",
+      "max_length": 32
+    },
+    {
+      "name": "embedding_model",
+      "type": "VARCHAR",
+      "max_length": 128
+    },
+    {
+      "name": "embedding_version",
+      "type": "VARCHAR",
+      "max_length": 64
+    },
+    {
+      "name": "schema_version",
+      "type": "INT64"
+    },
+    {
+      "name": "is_active",
+      "type": "BOOL"
+    }
+  ],
+  "required_filter_fields": [
+    "tenant_id",
+    "kb_id",
+    "visibility",
+    "is_active"
+  ]
+}

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from kyuriagents.ingestion import KnowledgeBaseService
 from kyuriagents.runtime import AgentRuntimeConfig, create_kyuri_agent
 from kyuriagents.runtime.errors import public_error_message
+from kyuriagents.runtime.time_context import format_time_context_block
 from kyuriagents.runtime.token_budget import TokenBudgetExceeded, enforce_user_input_budget, messages_tokens, token_counter_from_config
 from kyuriagents.server.identity import (
     AuthContext,
@@ -100,10 +101,11 @@ _MIN_PASSWORD_LENGTH = 8
 _STREAM_ITEM_PAIR_LENGTH = 2
 _STREAM_ITEM_TRIPLE_LENGTH = 3
 _KnowledgeResult = TypeVar("_KnowledgeResult")
-_DEFAULT_API_SYSTEM_PROMPT = """You are Kyuriagents, a careful agent with access to tools, RAG, and long-term memory.
+_DEFAULT_API_SYSTEM_PROMPT = """You are Kyuriagents, a careful city-culture and travel agent with access to tools, RAG, and a structured traveler profile.
 
 Answer the user's question directly and in the user's language unless they ask otherwise.
-When retrieved knowledge-base or memory context is available, ground your answer in that context and prefer concrete dates, names, and facts.
+When retrieved knowledge-base or traveler-profile context is available, ground your answer in that context and prefer concrete dates, names, and facts.
+Use the traveler profile as durable personalization memory: respect hard constraints, apply stable preferences when relevant, and update it only when the user states lasting travel preferences, constraints, trip state, or history facts.
 When web search results are available, cite source titles or URLs and distinguish current web evidence from local knowledge.
 Do not use web search to locate pirated, leaked, cracked, or unauthorized download resources.
 For comparison questions, state the conclusion first, then give the supporting facts.
@@ -112,6 +114,11 @@ If the available context is insufficient, say so briefly and name the missing in
 """
 ParserMode = Literal["auto", "local", "mcp"]
 Visibility = Literal["private", "team", "public"]
+
+
+def _api_system_prompt() -> str:
+    """Return the current request system prompt with runtime date context."""
+    return f"{_DEFAULT_API_SYSTEM_PROMPT.rstrip()}\n\n{format_time_context_block()}"
 
 
 class RegisterRequest(BaseModel):
@@ -193,7 +200,7 @@ class TaskCreateRequest(BaseModel):
     goal: str
     thread_id: str | None = None
     title: str = ""
-    intent: Literal["chat", "task", "rag_query", "memory_query", "clarify", "unsafe"] | None = "task"
+    intent: Literal["chat", "task", "rag_query", "clarify", "unsafe"] | None = "task"
     rag_enabled: bool | None = None
     web_search_enabled: bool | None = None
 
@@ -202,7 +209,7 @@ class TaskResumeRequest(BaseModel):
     """Request body for resuming a task waiting for human input."""
 
     message: str
-    intent: Literal["chat", "task", "rag_query", "memory_query", "clarify", "unsafe"] | None = "task"
+    intent: Literal["chat", "task", "rag_query", "clarify", "unsafe"] | None = "task"
     rag_enabled: bool | None = None
     web_search_enabled: bool | None = None
 
@@ -827,7 +834,7 @@ def _register_chat_route(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         user_message = _pending_user_message(context=context, thread=thread, content=request.message)
         agent_config = _pending_chat_runtime_config(config, context=context, thread=thread, request=request)
-        agent = cast("_Agent", agent_factory(agent_config, system_prompt=_DEFAULT_API_SYSTEM_PROMPT))
+        agent = cast("_Agent", agent_factory(agent_config, system_prompt=_api_system_prompt()))
         chat_context = _build_chat_context(
             config=agent_config,
             user_center=user_center,
@@ -881,7 +888,7 @@ def _register_chat_route(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         user_message = _pending_user_message(context=context, thread=thread, content=request.message)
         agent_config = _pending_chat_runtime_config(config, context=context, thread=thread, request=request)
-        agent = cast("_Agent", agent_factory(agent_config, system_prompt=_DEFAULT_API_SYSTEM_PROMPT))
+        agent = cast("_Agent", agent_factory(agent_config, system_prompt=_api_system_prompt()))
         chat_context = _build_chat_context(
             config=agent_config,
             user_center=user_center,
@@ -938,12 +945,9 @@ def _pending_chat_runtime_config(
     request: ChatRequest,
 ) -> AgentRuntimeConfig:
     runtime = _chat_runtime_config(config, context=context, thread=thread, request=request)
-    memory_mode = "off" if runtime.memory_mode == "off" else "auto"
     return replace(
         runtime,
         enable_checkpointer=False,
-        memory_checkpoint_interval=0,
-        memory_mode=memory_mode,
     )
 
 
@@ -1091,8 +1095,6 @@ def _graph_config(*, context: AuthContext, thread: ThreadRecord) -> dict[str, di
             "user_id": context.user.user_id,
             "thread_id": thread.thread_id,
             "tool_thread_id": thread.thread_id,
-            "memory_scope_types": ["user"],
-            "memory_scope_ids": [context.user.user_id],
         }
     }
 
@@ -1165,7 +1167,7 @@ def _task_event_source(
     task: TaskRecord,
     messages: Sequence[MessageRecord],
     user_content: str,
-    forced_intent: Literal["chat", "task", "rag_query", "memory_query", "clarify", "unsafe"] | None,
+    forced_intent: Literal["chat", "task", "rag_query", "clarify", "unsafe"] | None,
     disabled_tools: Sequence[str],
     user_metadata: Mapping[str, object] | None = None,
     assistant_metadata: Mapping[str, object] | None = None,
@@ -1449,12 +1451,11 @@ def _messages_from_update(update: object) -> list[object]:
 def _tool_status_text(tool_name: str) -> str:
     status_by_tool = {
         "search_knowledge_base": "正在检索知识库...",
-        "search_memory": "正在检索长期记忆...",
+        "get_travel_profile": "正在读取游客画像...",
+        "update_travel_profile": "正在更新游客画像...",
         "web_search": "正在联网搜索...",
         "web_research": "正在阅读网页...",
         "web_fetch_page": "正在打开网页...",
-        "save_memory": "正在保存记忆...",
-        "delete_memory": "正在更新记忆...",
     }
     return status_by_tool.get(tool_name, f"正在调用 {tool_name}...")
 
@@ -1567,7 +1568,7 @@ def _raise_if_postgres_schema_drift(exc: Exception) -> None:
         return
     msg = (
         "PostgreSQL schema is out of date. Re-apply the runtime schema before using knowledge bases: "
-        "`python scripts/bootstrap_runtime.py --skip-rag-index --skip-memory-index`."
+        "`python scripts/bootstrap_runtime.py --skip-rag-index`."
     )
     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg) from exc
 

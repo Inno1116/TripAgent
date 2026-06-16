@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, cast
 
 from langchain.agents import create_agent
 
-from kyuriagents.memory import ElasticsearchMilvusMemoryIndexer, MemoryHybridSearcher, MemoryService, PostgresMemoryStore
 from kyuriagents.middleware.retrieval import RetrievalMiddleware
+from kyuriagents.profile import PostgresTravelProfileStore, TravelProfileService
 from kyuriagents.rag import DashScopeTextReranker, ElasticsearchKeywordStore, HybridRAGRetriever, MilvusVectorStore, PostgresChunkTextHydrator
 from kyuriagents.runtime.dashscope import EmbedQuery, create_dashscope_embed_query, create_dashscope_model
 from kyuriagents.runtime.mcp import LoadedMCPTools, load_mcp_tools
@@ -21,6 +21,7 @@ from kyuriagents.tools import (
     default_tool_registry,
     merge_tool_sequences,
 )
+from kyuriagents.travel import create_travel_tools, travel_tool_descriptors
 from kyuriagents.websearch import create_web_search_tools, web_search_tool_descriptors
 
 if TYPE_CHECKING:
@@ -43,7 +44,7 @@ def create_kyuri_agent(
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
     middleware: Sequence[AgentMiddleware] = (),
     rag_retriever: HybridRAGRetriever | None = None,
-    memory_service: MemoryService | None = None,
+    profile_service: TravelProfileService | None = None,
     embed_query: EmbedQuery | None = None,
     tool_registry: ToolRegistry | None = None,
     tool_policy: ToolPolicy | None = None,
@@ -56,7 +57,7 @@ def create_kyuri_agent(
     debug: bool = False,
     name: str | None = None,
 ) -> object:
-    """Create a Kyuri agent with runtime RAG and memory wiring.
+    """Create a Kyuri agent with runtime RAG and structured traveler profile wiring.
 
     Args:
         config: Runtime configuration.
@@ -64,7 +65,7 @@ def create_kyuri_agent(
         tools: Additional user tools.
         middleware: Additional middleware before retrieval wiring.
         rag_retriever: Optional prebuilt RAG retriever.
-        memory_service: Optional prebuilt memory service.
+        profile_service: Optional prebuilt structured traveler profile service.
         embed_query: Optional query embedding function.
         tool_registry: Optional registry for tool descriptors.
         tool_policy: Optional policy for tool calls.
@@ -86,12 +87,8 @@ def create_kyuri_agent(
     if config.enable_rag and rag_retriever is None:
         resolved_embed_query = resolved_embed_query or create_dashscope_embed_query(config)
         rag_retriever = _create_rag_retriever(config, resolved_embed_query)
-    if config.enable_memory and memory_service is None:
-        memory_service = _create_memory_service(
-            config,
-            hybrid_retriever=rag_retriever if config.enable_rag else None,
-            embed_text=resolved_embed_query,
-        )
+    if config.enable_travel_profile and profile_service is None:
+        profile_service = _create_travel_profile_service(config)
 
     resolved_checkpointer = checkpointer
     resolved_store = store
@@ -102,23 +99,31 @@ def create_kyuri_agent(
 
     retrieval = RetrievalMiddleware(
         rag_retriever=rag_retriever if config.enable_rag else None,
-        memory_service=memory_service if config.enable_memory else None,
+        profile_service=profile_service if config.enable_travel_profile else None,
         rag_mode=config.rag_mode,
-        memory_mode=config.memory_mode,
+        profile_auto=config.enable_travel_profile,
         defaults=config.retrieval_defaults(),
-        memory_checkpoint_interval=config.memory_checkpoint_interval,
-        memory_checkpoint_max_chars=config.memory_checkpoint_max_chars,
+        profile_context_max_chars=config.travel_profile_context_max_chars,
     )
     runtime_web_tools = create_web_search_tools(config) if config.enable_web_search else ()
+    runtime_travel_tools = create_travel_tools(config) if config.enable_travel_tools else ()
     resolved_tools, governance = _build_tool_runtime(
         config,
         native_tools=tools,
-        runtime_tools=runtime_web_tools,
-        runtime_descriptors=web_search_tool_descriptors(
-            timeout_seconds=max(1, int(max(config.web_search_timeout_seconds, config.web_fetch_timeout_seconds, config.web_render_timeout_seconds)))
-        )
-        if config.enable_web_search
-        else (),
+        runtime_tools=(*runtime_web_tools, *runtime_travel_tools),
+        runtime_descriptors=(
+            *(
+                web_search_tool_descriptors(
+                    timeout_seconds=max(
+                        1,
+                        int(max(config.web_search_timeout_seconds, config.web_fetch_timeout_seconds, config.web_render_timeout_seconds)),
+                    )
+                )
+                if config.enable_web_search
+                else ()
+            ),
+            *(travel_tool_descriptors(timeout_seconds=max(1, int(config.web_search_timeout_seconds))) if config.enable_travel_tools else ()),
+        ),
         middleware_tools=retrieval.tools,
         tool_registry=tool_registry,
         tool_policy=tool_policy,
@@ -185,48 +190,12 @@ def _create_rag_reranker(config: AgentRuntimeConfig) -> DashScopeTextReranker | 
     )
 
 
-def _create_memory_service(
-    config: AgentRuntimeConfig,
-    *,
-    hybrid_retriever: HybridRAGRetriever | None = None,
-    embed_text: EmbedQuery | None = None,
-) -> MemoryService:
+def _create_travel_profile_service(config: AgentRuntimeConfig) -> TravelProfileService:
     if not config.postgres_dsn:
-        missing = ", ".join(config.missing_for_memory())
-        msg = f"Missing settings for memory runtime: {missing}."
+        missing = ", ".join(config.missing_for_profile())
+        msg = f"Missing settings for traveler profile runtime: {missing}."
         raise ValueError(msg)
-    store = PostgresMemoryStore(dsn=config.postgres_dsn)
-    hybrid_searcher = None
-    indexer = None
-    if hybrid_retriever is not None and embed_text is not None:
-        memory_retriever = _create_memory_retriever(config, embed_text)
-        hybrid_searcher = MemoryHybridSearcher(retriever=memory_retriever, store=store)
-        indexer = ElasticsearchMilvusMemoryIndexer(
-            es_index=config.memory_es_index,
-            es_url=config.rag_es_url,
-            milvus_collection=config.memory_milvus_collection,
-            milvus_uri=config.rag_milvus_uri,
-            milvus_token=config.rag_milvus_token,
-            milvus_db=config.rag_milvus_db,
-            embed_text=embed_text,
-        )
-    return MemoryService(store, hybrid_searcher=hybrid_searcher, indexer=indexer)
-
-
-def _create_memory_retriever(config: AgentRuntimeConfig, embed_query: EmbedQuery) -> HybridRAGRetriever:
-    return HybridRAGRetriever(
-        vector_searcher=MilvusVectorStore(
-            collection_name=config.memory_milvus_collection,
-            uri=config.rag_milvus_uri,
-            token=config.rag_milvus_token,
-            db_name=config.rag_milvus_db,
-            embed_query=embed_query,
-        ),
-        keyword_searcher=ElasticsearchKeywordStore(
-            index=config.memory_es_index,
-            url=config.rag_es_url,
-        ),
-    )
+    return TravelProfileService(PostgresTravelProfileStore(dsn=config.postgres_dsn))
 
 
 def _build_tool_runtime(
@@ -291,7 +260,7 @@ def _register_tool_if_missing(
 
 def _create_langgraph_postgres(config: AgentRuntimeConfig) -> tuple[Checkpointer, BaseStore]:
     if not config.postgres_dsn:
-        missing = ", ".join(config.missing_for_memory())
+        missing = ", ".join(config.missing_for_postgres())
         msg = f"Missing settings for LangGraph PostgreSQL runtime: {missing}."
         raise ValueError(msg)
     try:
@@ -300,7 +269,7 @@ def _create_langgraph_postgres(config: AgentRuntimeConfig) -> tuple[Checkpointer
         from langgraph.store.postgres import PostgresStore  # noqa: PLC0415
         from psycopg.rows import dict_row  # noqa: PLC0415
     except ImportError as exc:
-        msg = "Install `kyuriagents[memory]` to use PostgreSQL checkpointer/store."
+        msg = "Install `kyuriagents-backend` with PostgreSQL dependencies to use checkpointer/store."
         raise ImportError(msg) from exc
 
     connect = cast("Any", psycopg.connect)

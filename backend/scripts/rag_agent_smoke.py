@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 from dataclasses import replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 
@@ -13,8 +13,6 @@ from kyuriagents.runtime import AgentRuntimeConfig, create_kyuri_agent
 
 if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
-
-    from kyuriagents.middleware.retrieval import RetrievalMode
 
 _LOGGER = logging.getLogger("rag_agent_smoke")
 _DEFAULT_KB_ID = "stratrag:train:train_000000"
@@ -76,8 +74,7 @@ def _runtime_config(*, kb_id: str, thread_id: str) -> AgentRuntimeConfig:
     return replace(
         config,
         rag_mode=cast("RetrievalMode", "tool"),
-        memory_mode=cast("RetrievalMode", "off"),
-        enable_memory=False,
+        enable_travel_profile=False,
         enable_checkpointer=False,
         rag_kb_ids=(kb_id,),
         thread_id=thread_id,

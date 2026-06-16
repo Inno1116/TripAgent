@@ -16,14 +16,28 @@ _READ_ONLY_BUILTINS = (
     "glob",
     "grep",
     "search_knowledge_base",
-    "search_memory",
+    "get_travel_profile",
+    "estimate_travel_budget",
+)
+_EXTERNAL_READ_BUILTINS = (
+    "web_search",
+    "web_research",
+    "web_fetch_page",
+    "web_fetch_static",
+    "web_render_page",
+    "web_agent",
+    "rag_agent",
+    "amap_search_poi",
+    "amap_get_weather",
+    "amap_plan_route",
+    "amap_get_poi_detail",
+    "amap_create_trip_map",
 )
 _WRITE_BUILTINS = (
     "write_todos",
     "write_file",
     "edit_file",
-    "save_memory",
-    "delete_memory",
+    "update_travel_profile",
 )
 _DESTRUCTIVE_BUILTINS = ("execute",)
 _RUNTIME_BUILTINS = ("task", "launch_task", "check_task", "update_task", "cancel_task", "list_tasks")
@@ -253,10 +267,19 @@ def _builtin_descriptors() -> list[ToolDescriptor]:
         *[
             ToolDescriptor(
                 name=name,
+                description="External read KyuriAgents runtime tool.",
+                risk="external_read",
+                source="runtime",
+            )
+            for name in _EXTERNAL_READ_BUILTINS
+        ],
+        *[
+            ToolDescriptor(
+                name=name,
                 description="Write-capable KyuriAgents built-in tool.",
                 risk="write",
                 source="builtin",
-                requires_confirmation=name in {"write_file", "edit_file", "delete_memory"},
+                requires_confirmation=name in {"write_file", "edit_file"},
             )
             for name in _WRITE_BUILTINS
         ],

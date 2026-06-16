@@ -4,8 +4,8 @@ This package wires the SDK primitives into a runnable deployment shape:
 
 - DashScope chat and embedding clients through the OpenAI-compatible API.
 - PostgreSQL schema/bootstrap helpers.
-- `PostgresMemoryStore` for durable long-term memory.
-- `RetrievalMiddleware` with RAG and memory enabled from one config object.
+- Structured traveler profiles for durable personalization.
+- `RetrievalMiddleware` with RAG and traveler-profile injection from one config object.
 - `ToolGovernanceMiddleware` with policy checks and optional PostgreSQL audit logs.
 - Optional MCP tool loading via `langchain-mcp-adapters`.
 
@@ -71,44 +71,26 @@ Browser clients must come from an allowed origin. Development defaults are
 `http://127.0.0.1:5173` and `http://localhost:5173`; override them with
 `DEEPAGENTS_API_CORS_ORIGINS`.
 
-Long-term memory can use a separate hybrid retrieval index so normal RAG
-knowledge bases do not mix with user memories. Defaults are:
+Structured traveler profiles are stored as one JSONB document per tenant/user
+and injected into the agent prompt when present:
 
 ```bash
-MEMORY_ES_INDEX=memory_chunks
-MEMORY_MILVUS_COLLECTION=memory_chunks
-DEEPAGENTS_MEMORY_CHECKPOINT_INTERVAL=10
-DEEPAGENTS_MEMORY_CHECKPOINT_MAX_CHARS=3000
+KYURI_ENABLE_TRAVEL_PROFILE=true
+KYURI_TRAVEL_PROFILE_CONTEXT_MAX_CHARS=4000
 DEEPAGENTS_ENABLE_CONTEXT_SUMMARIZATION=true
 DEEPAGENTS_CONTEXT_SUMMARY_MODEL=
-DEEPAGENTS_CONTEXT_SUMMARY_TRIGGER_MESSAGES=40
+DEEPAGENTS_CONTEXT_SUMMARY_TRIGGER_TOKENS=100000
 DEEPAGENTS_CONTEXT_SUMMARY_KEEP_MESSAGES=12
 ```
 
-`DEEPAGENTS_MEMORY_CHECKPOINT_INTERVAL` controls deterministic long-term
-memory checkpoints. The default writes one `summary` memory every 10 user
-turns. Set it to `0` to disable automatic checkpoints.
-
-Short-term context summarization is separate from long-term memory. When a
-thread reaches `DEEPAGENTS_CONTEXT_SUMMARY_TRIGGER_MESSAGES`, older messages
+Short-term context summarization is separate from traveler profiles. When a
+thread reaches `DEEPAGENTS_CONTEXT_SUMMARY_TRIGGER_TOKENS`, older messages
 are summarized for the next model call and only
 `DEEPAGENTS_CONTEXT_SUMMARY_KEEP_MESSAGES` recent messages stay verbatim. The
 raw thread state remains checkpointed; this only manages what the model sees in
 its active context window.
 Set `DEEPAGENTS_CONTEXT_SUMMARY_MODEL` to use a cheaper DashScope-compatible
 chat model for summaries. Leave it empty to reuse the main chat model.
-
-Create those indexes before enabling hybrid memory search:
-
-```bash
-python scripts/memory_index.py init
-```
-
-If memories already exist in PostgreSQL, rebuild the hybrid memory index:
-
-```bash
-python scripts/memory_index.py reindex
-```
 
 MCP usage is optional. Set `DEEPAGENTS_ENABLE_MCP=true` and point
 `DEEPAGENTS_MCP_CONFIG_PATH` at a JSON file shaped like `mcp.json.example`.

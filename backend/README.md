@@ -10,7 +10,7 @@ KyuriAgents middleware.
 - FastAPI service and user center APIs
 - LangChain/LangGraph agent factory
 - Hybrid RAG over Elasticsearch and Milvus
-- PostgreSQL-backed long-term memory and context summaries
+- PostgreSQL-backed structured traveler profiles and context summaries
 - Redis pending-turn and ingestion queues
 - Task planning runtime
 - SearXNG and Playwright web search tools
@@ -33,6 +33,5 @@ python -m pip install -e .
 python scripts\api_server.py
 ```
 
-Runtime settings are still read from the existing `DEEPAGENTS_*`, `RAG_*`,
-`MEMORY_*`, `DASHSCOPE_*`, and `KYURI_*` environment variables so existing
-local and Docker configurations continue to work.
+Runtime settings are read from `DEEPAGENTS_*`, `RAG_*`, `DASHSCOPE_*`, and
+`KYURI_*` environment variables.

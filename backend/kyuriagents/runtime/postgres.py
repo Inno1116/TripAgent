@@ -51,7 +51,7 @@ def apply_kyuriagents_postgres_schemas(
     *,
     dsn: str,
     include_rag: bool = True,
-    include_memory: bool = True,
+    include_profile: bool = True,
     include_tools: bool = True,
     include_api: bool = True,
     include_langgraph: bool = True,
@@ -61,7 +61,7 @@ def apply_kyuriagents_postgres_schemas(
     Args:
         dsn: Application PostgreSQL DSN.
         include_rag: Whether to apply RAG metadata tables.
-        include_memory: Whether to apply dynamic memory tables.
+        include_profile: Whether to apply structured traveler profile tables.
         include_tools: Whether to apply tool and MCP governance tables.
         include_api: Whether to apply user center and API service tables.
         include_langgraph: Whether to run LangGraph checkpointer/store setup.
@@ -75,12 +75,12 @@ def apply_kyuriagents_postgres_schemas(
     with psycopg.connect(dsn, autocommit=True) as connection:
         if include_rag:
             connection.execute(cast("LiteralString", _resource_text("kyuriagents.rag", "schemas/postgres_schema.sql")))
-        if include_memory:
-            connection.execute(cast("LiteralString", _resource_text("kyuriagents.memory", "schemas/postgres_schema.sql")))
         if include_tools:
             connection.execute(cast("LiteralString", _resource_text("kyuriagents.tools", "schemas/postgres_schema.sql")))
         if include_api:
             connection.execute(cast("LiteralString", _resource_text("kyuriagents.server", "schemas/postgres_schema.sql")))
+        if include_profile:
+            connection.execute(cast("LiteralString", _resource_text("kyuriagents.profile", "schemas/postgres_schema.sql")))
 
     if include_langgraph:
         _setup_langgraph_postgres(dsn)

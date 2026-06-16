@@ -1,0 +1,24 @@
+.\backend\.venv\Scripts\python.exe .\backend\scripts\RAGAS\tourism_ragas_eval.py `
+  --phase judge `
+  --judge ragas `
+  --ragas-metrics faithfulness,answer_correctness,context_recall `
+  --ragas-max-workers 1 `
+  --ragas-max-retries 1
+
+
+
+
+
+
+
+
+
+
+
+
+  .\backend\.venv\Scripts\python.exe .\backend\scripts\RAGAS\tourism_ragas_eval.py `
+  --kb-id kb_2bf22e469fd2403989782566b1180393 `
+  --mode hybrid `
+  --top-k 5 `
+  --phase generate `
+  --force

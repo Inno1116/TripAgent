@@ -26,7 +26,7 @@ _DASHSCOPE_RERANK_URL = "https://dashscope.aliyuncs.com/api/v1/services/rerank/t
 
 @dataclass(frozen=True, kw_only=True)
 class AgentRuntimeConfig:
-    """Runtime configuration for wiring model, RAG, memory, and persistence.
+    """Runtime configuration for wiring model, RAG, traveler profile, and persistence.
 
     Args:
         tenant_id: Tenant or organization identifier.
@@ -45,10 +45,9 @@ class AgentRuntimeConfig:
         postgres_admin_dsn: Optional admin PostgreSQL DSN for database creation.
         postgres_database: Database name to create during bootstrap.
         enable_rag: Whether to wire RAG when dependencies are available.
-        enable_memory: Whether to wire long-term memory.
+        enable_travel_profile: Whether to wire structured traveler profile memory.
         enable_checkpointer: Whether to wire LangGraph PostgreSQL persistence.
         rag_mode: RAG middleware mode.
-        memory_mode: Long-term memory middleware mode.
         rag_es_url: Elasticsearch URL.
         rag_es_index: Elasticsearch index.
         rag_milvus_uri: Milvus URI.
@@ -60,12 +59,8 @@ class AgentRuntimeConfig:
             environment to disable this quality layer.
         rag_rerank_url: DashScope rerank endpoint URL.
         rag_rerank_timeout_seconds: DashScope rerank request timeout.
-        memory_es_index: Elasticsearch index for memory chunks.
-        memory_milvus_collection: Milvus collection for memory vectors.
-        memory_checkpoint_interval: Number of user turns between automatic
-            long-term memory checkpoints. Use `0` to disable.
-        memory_checkpoint_max_chars: Maximum characters saved in one automatic
-            memory checkpoint.
+        travel_profile_context_max_chars: Maximum traveler profile characters
+            injected into model prompts.
         enable_context_summarization: Whether to enable short-term thread
             summarization before model calls.
         context_summary_trigger_tokens: Approximate input tokens that trigger
@@ -84,7 +79,6 @@ class AgentRuntimeConfig:
         context_safety_ratio: Conservative multiplier applied to the context window.
         max_user_input_tokens: Maximum tokens accepted in one user message.
         max_rag_context_tokens: Maximum retrieved RAG context tokens.
-        max_memory_context_tokens: Maximum retrieved memory context tokens.
         max_tool_result_tokens: Maximum one tool result tokens.
         tokenizer_model: Qwen tokenizer model used for local token counting.
         tokenizer_local_files_only: Whether tokenization may only use cached files.
@@ -93,10 +87,11 @@ class AgentRuntimeConfig:
         enable_subagents: Whether the main agent should delegate RAG and web
             research through specialized subagents instead of seeing those raw
             tools directly.
-        enable_task_graph_runtime: Whether task mode should use the
-            LangGraph-backed planner/executor graph instead of the legacy
-            imperative loop.
         enable_web_search: Whether to expose public web search tools.
+        enable_travel_tools: Whether to expose travel-domain tools backed by
+            AMap MCP plus local budget estimation.
+        amap_api_key: AMap API key used by the official AMap MCP endpoint.
+        amap_mcp_url: Optional override for the AMap Streamable HTTP MCP URL.
         searxng_base_url: Base URL for the SearXNG instance.
         web_search_max_results: Maximum SearXNG results returned to one tool call.
         web_agent_max_search_calls: Maximum search calls a web subagent should
@@ -160,10 +155,9 @@ class AgentRuntimeConfig:
     postgres_admin_dsn: str | None = None
     postgres_database: str = "kyuriagents"
     enable_rag: bool = True
-    enable_memory: bool = True
+    enable_travel_profile: bool = True
     enable_checkpointer: bool = True
     rag_mode: RetrievalMode = "tool"
-    memory_mode: RetrievalMode = "hybrid"
     rag_es_url: str = "http://localhost:9200"
     rag_es_index: str = "rag_chunks"
     rag_milvus_uri: str = "http://localhost:19530"
@@ -174,10 +168,7 @@ class AgentRuntimeConfig:
     rag_rerank_model: str | None = "qwen3-vl-rerank"
     rag_rerank_url: str = _DASHSCOPE_RERANK_URL
     rag_rerank_timeout_seconds: float = 10.0
-    memory_es_index: str = "memory_chunks"
-    memory_milvus_collection: str = "memory_chunks"
-    memory_checkpoint_interval: int = 10
-    memory_checkpoint_max_chars: int = 3_000
+    travel_profile_context_max_chars: int = 4_000
     enable_context_summarization: bool = True
     context_summary_trigger_tokens: int = 100_000
     context_summary_trigger_messages: int = 0
@@ -190,14 +181,15 @@ class AgentRuntimeConfig:
     context_safety_ratio: float = 0.85
     max_user_input_tokens: int = 12_800
     max_rag_context_tokens: int = 12_000
-    max_memory_context_tokens: int = 3_000
     max_tool_result_tokens: int = 6_000
     tokenizer_model: str = "Qwen/Qwen3-8B"
     tokenizer_local_files_only: bool = True
     tokenizer_strict: bool = False
     enable_subagents: bool = False
-    enable_task_graph_runtime: bool = True
     enable_web_search: bool = False
+    enable_travel_tools: bool = True
+    amap_api_key: str | None = None
+    amap_mcp_url: str | None = None
     searxng_base_url: str = "http://127.0.0.1:8888"
     web_search_max_results: int = 8
     web_search_query_plan_size: int = 3
@@ -294,8 +286,8 @@ class AgentRuntimeConfig:
         if self.max_rag_context_tokens <= 0:
             msg = "`max_rag_context_tokens` must be positive."
             raise ValueError(msg)
-        if self.max_memory_context_tokens <= 0:
-            msg = "`max_memory_context_tokens` must be positive."
+        if self.travel_profile_context_max_chars <= 0:
+            msg = "`travel_profile_context_max_chars` must be positive."
             raise ValueError(msg)
         if self.max_tool_result_tokens <= 0:
             msg = "`max_tool_result_tokens` must be positive."
@@ -414,14 +406,13 @@ class AgentRuntimeConfig:
             context_summary_model=_optional_env(source, "DEEPAGENTS_CONTEXT_SUMMARY_MODEL", "DASHSCOPE_CONTEXT_SUMMARY_MODEL"),
             embedding_model=_env(source, "DASHSCOPE_EMBEDDING_MODEL", "DEEPAGENTS_EMBEDDING_MODEL", default="text-embedding-v3"),
             embedding_dimensions=_optional_int_env(source, "DASHSCOPE_EMBEDDING_DIMENSIONS", "DEEPAGENTS_EMBEDDING_DIMENSIONS"),
-            postgres_dsn=_optional_env(source, "DEEPAGENTS_POSTGRES_DSN", "MEMORY_POSTGRES_DSN", "RAG_POSTGRES_DSN"),
+            postgres_dsn=_optional_env(source, "DEEPAGENTS_POSTGRES_DSN", "RAG_POSTGRES_DSN"),
             postgres_admin_dsn=_optional_env(source, "DEEPAGENTS_POSTGRES_ADMIN_DSN", "POSTGRES_ADMIN_DSN"),
             postgres_database=_env(source, "DEEPAGENTS_POSTGRES_DATABASE", "POSTGRES_DATABASE", default="kyuriagents"),
             enable_rag=_bool_env(source, "DEEPAGENTS_ENABLE_RAG", default=True),
-            enable_memory=_bool_env(source, "DEEPAGENTS_ENABLE_MEMORY", default=True),
+            enable_travel_profile=_bool_env(source, "KYURI_ENABLE_TRAVEL_PROFILE", "DEEPAGENTS_ENABLE_TRAVEL_PROFILE", default=True),
             enable_checkpointer=_bool_env(source, "DEEPAGENTS_ENABLE_CHECKPOINTER", default=True),
             rag_mode=_retrieval_mode(_env(source, "DEEPAGENTS_RAG_MODE", default="tool")),
-            memory_mode=_retrieval_mode(_env(source, "DEEPAGENTS_MEMORY_MODE", default="hybrid")),
             rag_es_url=_env(source, "RAG_ES_URL", default="http://localhost:9200"),
             rag_es_index=_env(source, "RAG_ES_INDEX", default="rag_chunks"),
             rag_milvus_uri=_env(source, "RAG_MILVUS_URI", default="http://localhost:19530"),
@@ -437,10 +428,7 @@ class AgentRuntimeConfig:
             ),
             rag_rerank_url=_env(source, "DEEPAGENTS_RAG_RERANK_URL", "DASHSCOPE_RERANK_URL", default=_DASHSCOPE_RERANK_URL),
             rag_rerank_timeout_seconds=_float_env(source, "DEEPAGENTS_RAG_RERANK_TIMEOUT_SECONDS", "DASHSCOPE_RERANK_TIMEOUT_SECONDS", default=10.0),
-            memory_es_index=_env(source, "MEMORY_ES_INDEX", default="memory_chunks"),
-            memory_milvus_collection=_env(source, "MEMORY_MILVUS_COLLECTION", default="memory_chunks"),
-            memory_checkpoint_interval=_int_env(source, "DEEPAGENTS_MEMORY_CHECKPOINT_INTERVAL", default=10),
-            memory_checkpoint_max_chars=_int_env(source, "DEEPAGENTS_MEMORY_CHECKPOINT_MAX_CHARS", default=3_000),
+            travel_profile_context_max_chars=_int_env(source, "KYURI_TRAVEL_PROFILE_CONTEXT_MAX_CHARS", "DEEPAGENTS_TRAVEL_PROFILE_CONTEXT_MAX_CHARS", default=4_000),
             enable_context_summarization=_bool_env(source, "DEEPAGENTS_ENABLE_CONTEXT_SUMMARIZATION", default=True),
             context_summary_trigger_tokens=_int_env(source, "DEEPAGENTS_CONTEXT_SUMMARY_TRIGGER_TOKENS", default=100_000),
             context_summary_trigger_messages=_int_env(source, "DEEPAGENTS_CONTEXT_SUMMARY_TRIGGER_MESSAGES", default=0),
@@ -453,14 +441,15 @@ class AgentRuntimeConfig:
             context_safety_ratio=_float_env(source, "KYURI_CONTEXT_SAFETY_RATIO", "DEEPAGENTS_CONTEXT_SAFETY_RATIO", default=0.85),
             max_user_input_tokens=_int_env(source, "KYURI_MAX_USER_INPUT_TOKENS", "DEEPAGENTS_MAX_USER_INPUT_TOKENS", default=12_800),
             max_rag_context_tokens=_int_env(source, "KYURI_MAX_RAG_CONTEXT_TOKENS", "DEEPAGENTS_MAX_RAG_CONTEXT_TOKENS", default=12_000),
-            max_memory_context_tokens=_int_env(source, "KYURI_MAX_MEMORY_CONTEXT_TOKENS", "DEEPAGENTS_MAX_MEMORY_CONTEXT_TOKENS", default=3_000),
             max_tool_result_tokens=_int_env(source, "KYURI_MAX_TOOL_RESULT_TOKENS", "DEEPAGENTS_MAX_TOOL_RESULT_TOKENS", default=6_000),
             tokenizer_model=_env(source, "QWEN_TOKENIZER_MODEL", "KYURI_TOKENIZER_MODEL", default="Qwen/Qwen3-8B"),
             tokenizer_local_files_only=_bool_env(source, "QWEN_TOKENIZER_LOCAL_FILES_ONLY", default=True),
             tokenizer_strict=_bool_env(source, "QWEN_TOKENIZER_STRICT", default=False),
             enable_subagents=_bool_env(source, "DEEPAGENTS_ENABLE_SUBAGENTS", "KYURI_ENABLE_SUBAGENTS", default=False),
-            enable_task_graph_runtime=_bool_env(source, "DEEPAGENTS_ENABLE_TASK_GRAPH_RUNTIME", "KYURI_ENABLE_TASK_GRAPH_RUNTIME", default=True),
             enable_web_search=_bool_env(source, "DEEPAGENTS_ENABLE_WEB_SEARCH", "KYURI_ENABLE_WEB_SEARCH", default=False),
+            enable_travel_tools=_bool_env(source, "KYURI_ENABLE_TRAVEL_TOOLS", "DEEPAGENTS_ENABLE_TRAVEL_TOOLS", default=True),
+            amap_api_key=_optional_env(source, "AMAP_API_KEY", "DEEPAGENTS_AMAP_API_KEY", "KYURI_AMAP_API_KEY"),
+            amap_mcp_url=_optional_env(source, "AMAP_MCP_URL", "DEEPAGENTS_AMAP_MCP_URL", "KYURI_AMAP_MCP_URL"),
             searxng_base_url=_env(source, "SEARXNG_BASE_URL", "DEEPAGENTS_SEARXNG_BASE_URL", default="http://127.0.0.1:8888"),
             web_search_max_results=_int_env(source, "DEEPAGENTS_WEB_SEARCH_MAX_RESULTS", default=8),
             web_search_query_plan_size=_int_env(source, "DEEPAGENTS_WEB_SEARCH_QUERY_PLAN_SIZE", default=3),
@@ -534,11 +523,15 @@ class AgentRuntimeConfig:
             missing.append("RAG_MILVUS_URI")
         return tuple(missing)
 
-    def missing_for_memory(self) -> tuple[str, ...]:
-        """Return missing settings required to construct memory components."""
+    def missing_for_postgres(self) -> tuple[str, ...]:
+        """Return missing settings required to construct PostgreSQL-backed runtime components."""
         if self.postgres_dsn:
             return ()
         return ("DEEPAGENTS_POSTGRES_DSN",)
+
+    def missing_for_profile(self) -> tuple[str, ...]:
+        """Return missing settings required to construct traveler profile components."""
+        return self.missing_for_postgres()
 
     def tool_policy(self) -> ToolPolicy:
         """Return the configured tool policy."""

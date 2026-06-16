@@ -1,5 +1,5 @@
 -- User center and API service tables for deployed KyuriAgents runtimes.
--- RAG vectors live in Milvus; memory and tool tables live in their own schemas.
+-- RAG vectors live in Milvus; tool and profile tables live in their own schemas.
 
 CREATE TABLE IF NOT EXISTS agent_tenants (
     tenant_id TEXT PRIMARY KEY,
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     thread_id TEXT NOT NULL REFERENCES agent_threads(thread_id) ON DELETE CASCADE,
     goal TEXT NOT NULL,
     intent TEXT NOT NULL DEFAULT 'task'
-        CHECK (intent IN ('chat', 'task', 'rag_query', 'memory_query', 'clarify', 'unsafe')),
+        CHECK (intent IN ('chat', 'task', 'rag_query', 'clarify', 'unsafe')),
     status TEXT NOT NULL DEFAULT 'queued'
         CHECK (status IN ('queued', 'planning', 'running', 'waiting_user', 'succeeded', 'failed', 'cancelled')),
     title TEXT NOT NULL DEFAULT '',
@@ -121,6 +121,12 @@ CREATE INDEX IF NOT EXISTS agent_tasks_thread_created_idx
     ON agent_tasks(tenant_id, thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS agent_tasks_status_idx
     ON agent_tasks(tenant_id, status, created_at DESC);
+
+ALTER TABLE IF EXISTS agent_tasks
+    DROP CONSTRAINT IF EXISTS agent_tasks_intent_check;
+ALTER TABLE IF EXISTS agent_tasks
+    ADD CONSTRAINT agent_tasks_intent_check
+        CHECK (intent IN ('chat', 'task', 'rag_query', 'clarify', 'unsafe')) NOT VALID;
 
 CREATE TABLE IF NOT EXISTS agent_task_steps (
     step_id TEXT PRIMARY KEY,

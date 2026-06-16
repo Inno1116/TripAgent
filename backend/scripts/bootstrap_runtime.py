@@ -28,7 +28,7 @@ def main() -> None:
     parser.add_argument("--reset-indexes", action="store_true", help="Drop and recreate Elasticsearch indexes and Milvus collections.")
     parser.add_argument("--skip-postgres", action="store_true", help="Skip PostgreSQL schema setup.")
     parser.add_argument("--skip-rag-index", action="store_true", help="Skip RAG Elasticsearch/Milvus setup.")
-    parser.add_argument("--skip-memory-index", action="store_true", help="Skip memory Elasticsearch/Milvus setup.")
+    parser.add_argument("--skip-memory-index", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--attempts", type=int, default=30, help="Retry attempts while backing services start.")
     parser.add_argument("--delay", type=float, default=2.0, help="Seconds between retry attempts.")
     args = parser.parse_args()
@@ -52,13 +52,6 @@ def main() -> None:
         _retry(
             "initialize RAG indexes",
             lambda: _init_rag_indexes(config, reset=bool(args.reset_indexes)),
-            attempts=int(args.attempts),
-            delay=float(args.delay),
-        )
-    if not args.skip_memory_index:
-        _retry(
-            "initialize memory indexes",
-            lambda: _init_memory_indexes(config, reset=bool(args.reset_indexes)),
             attempts=int(args.attempts),
             delay=float(args.delay),
         )
@@ -106,12 +99,6 @@ def _init_rag_indexes(config: AgentRuntimeConfig, *, reset: bool) -> None:
     from stratrag_rag_eval import init_indexes  # noqa: PLC0415
 
     init_indexes(config, reset=reset)
-
-
-def _init_memory_indexes(config: AgentRuntimeConfig, *, reset: bool) -> None:
-    from memory_index import init_memory_indexes  # noqa: PLC0415
-
-    init_memory_indexes(config, reset=reset)
 
 
 if __name__ == "__main__":

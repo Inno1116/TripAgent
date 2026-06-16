@@ -12,7 +12,7 @@ class EvidenceSource(BaseModel):
 
     title: str = Field(default="", description="Human-readable source title.")
     url: str = Field(default="", description="Source URL or document URI.")
-    source_type: Literal["knowledge_base", "web", "memory", "other"] = Field(default="other", description="Source category.")
+    source_type: Literal["knowledge_base", "web", "profile", "other"] = Field(default="other", description="Source category.")
     quote: str = Field(default="", description="Short supporting excerpt, not a full page.")
 
 

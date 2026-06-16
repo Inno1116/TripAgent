@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from kyuriagents.tools.types import ToolRisk
 
-TaskIntent = Literal["chat", "task", "rag_query", "memory_query", "clarify", "unsafe"]
+TaskIntent = Literal["chat", "task", "rag_query", "clarify", "unsafe"]
 TaskStatus = Literal["queued", "planning", "running", "waiting_user", "succeeded", "failed", "cancelled"]
-TaskStepKind = Literal["think", "tool", "rag", "web", "process", "answer"]
+TaskStepKind = Literal["tool", "rag", "web", "process", "answer"]
 TaskStepStatus = Literal["pending", "running", "succeeded", "failed", "skipped", "cancelled"]
 TaskEventType = Literal[
     "created",
@@ -112,7 +112,7 @@ class TaskEventRecord:
 class PlannedStep:
     """Step produced by a planner before persistence."""
 
-    kind: TaskStepKind
+    kind: str
     title: str
     instruction: str = ""
     tool_name: str = ""

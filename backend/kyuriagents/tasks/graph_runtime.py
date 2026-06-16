@@ -21,6 +21,7 @@ from kyuriagents.tasks.runtime import (
     Observer,
     PlanValidator,
     TaskExecutionContext,
+    TaskPreSearcher,
     TaskRunResult,
     TaskRuntime,
     TaskRuntimeLimits,
@@ -45,7 +46,7 @@ if TYPE_CHECKING:
     from kyuriagents.runtime import AgentRuntimeConfig
     from kyuriagents.server.identity import MessageRecord
 
-_Route = Literal["plan", "select_step", "execute_step", "replan", "ask_user", "answer", "fail"]
+_Route = Literal["presearch", "plan", "select_step", "execute_step", "replan", "ask_user", "answer", "fail"]
 
 
 class _Model(Protocol):
@@ -114,9 +115,37 @@ class ClarificationJudge:
         model = factory()
         prompt = (
             "You are the clarification gate for a travel-oriented task planner. Return only JSON.\n"
-            "Ask the user only when the task cannot be usefully planned without one short follow-up question.\n"
+            "Ask the user only when the current user goal cannot be usefully planned without one short follow-up question.\n"
             "Prefer making reasonable assumptions for broad exploration tasks. Do not ask for every optional slot.\n\n"
-            f"Context:\n{json.dumps(_context_for_clarification(context), ensure_ascii=False)}\n\n"
+            "Priority rules:\n"
+            "1. CURRENT_USER_GOAL is authoritative. Judge and normalize only this goal.\n"
+            "2. BACKGROUND_RECENT_MESSAGES is only background for resolving explicit references "
+            "such as `刚才`, `上一版`, `第三天`, `这个酒店`, or `加进去`.\n"
+            "3. Never replace the current goal with previous task content.\n"
+            "4. If the current goal mentions a new city, destination, attraction, topic, or intent "
+            "that differs from recent messages, treat it as a new task.\n"
+            "5. Only continue or modify a previous task when the current goal explicitly asks to "
+            "continue, revise, or refer back to it.\n"
+            "6. `normalized_goal` may lightly clarify pronouns or normalize wording, but must not "
+            "import dense prior-plan details unless the current goal explicitly refers to them.\n"
+            "7. If the current goal or a user clarification explicitly says to use the same conditions "
+            "as a previous plan, expand only transferable constraints into `normalized_goal` so it is "
+            "useful for search and planning.\n"
+            "8. Transferable constraints include traveler count/profile, trip length, budget range, "
+            "travel pace, interests, accessibility/dietary constraints, and service needs. Reuse dates "
+            "only when the user clearly asks to keep the same dates.\n"
+            "9. Non-transferable details include the previous destination city, previous attractions or "
+            "POIs, hotels, restaurants, routes, local weather, local transport details, and day-by-day "
+            "itinerary items. Never copy these into a new destination goal.\n"
+            "10. When expanding inherited conditions, keep the current destination/topic authoritative "
+            "and write one concise operational sentence suitable for planner and search queries.\n"
+            "11. If unsure whether prior context is needed, keep `normalized_goal` close to CURRENT_USER_GOAL.\n\n"
+            "Use RUNTIME_CONSTRAINTS.current_date/current_datetime/timezone as the runtime date context. "
+            "Do not infer current dates from model training data.\n\n"
+            f"<CURRENT_USER_GOAL>\n{context.goal}\n</CURRENT_USER_GOAL>\n\n"
+            f"<BACKGROUND_RECENT_MESSAGES>\n{json.dumps(list(context.recent_messages[-6:]), ensure_ascii=False)}\n</BACKGROUND_RECENT_MESSAGES>\n\n"
+            f"<RUNTIME_CONSTRAINTS>\n{json.dumps(context.constraints, ensure_ascii=False)}\n</RUNTIME_CONSTRAINTS>\n\n"
+            f"<METADATA>\n{json.dumps(context.metadata, ensure_ascii=False)}\n</METADATA>\n\n"
             "Return schema:\n"
             '{"need_user_input": boolean, "question": string, "reason": string, "normalized_goal": string}'
         )
@@ -185,6 +214,7 @@ class GraphTaskRuntime(TaskRuntime):
         validator: PlanValidator | None = None,
         executor: TaskStepExecutor | None = None,
         observer: Observer | None = None,
+        presearcher: TaskPreSearcher | None = None,
         limits: TaskRuntimeLimits | None = None,
     ) -> None:
         """Initialize the graph runtime."""
@@ -196,6 +226,7 @@ class GraphTaskRuntime(TaskRuntime):
             validator=validator,
             executor=executor,
             observer=observer,
+            presearcher=presearcher,
             limits=limits,
         )
         self._clarification_judge = clarification_judge or ClarificationJudge()
@@ -214,12 +245,18 @@ class GraphTaskRuntime(TaskRuntime):
         limits = TaskRuntimeLimits()
         tool_executor = TaskToolExecutor.from_config(config)
         evidence_agents = create_evidence_agents(config)
+        profile_service = None
+        if config.enable_travel_profile and config.postgres_dsn:
+            from kyuriagents.profile import PostgresTravelProfileStore, TravelProfileService  # noqa: PLC0415
+
+            profile_service = TravelProfileService(PostgresTravelProfileStore(dsn=config.postgres_dsn))
         return cls(
             store=store,
             planner=LLMPlanner(model_factory=model_factory),
             clarification_judge=ClarificationJudge(model_factory=model_factory),
             executor=TaskStepExecutor(model_factory=model_factory, tool_executor=tool_executor, evidence_agents=evidence_agents),
-            context_builder=ContextBuilder(),
+            context_builder=ContextBuilder(profile_service=profile_service),
+            presearcher=TaskPreSearcher.from_config(config),
             limits=limits,
         )
 
@@ -297,20 +334,26 @@ class GraphTaskRuntime(TaskRuntime):
                 constraints=context.constraints,
                 metadata={**context.metadata, "original_goal": task.goal},
             )
-        return {**state, "task": task, "intent": intent, "context": context, "route": "plan"}
+        return {**state, "task": task, "intent": intent, "context": context, "route": "presearch"}
+
+    def _presearch_node(self, state: _TaskGraphState) -> _TaskGraphState:
+        task = state["task"]
+        context = self._presearcher.enrich(state["context"])
+        self._record_presearch_event(task, context)
+        return {**state, "context": context, "route": "plan"}
 
     def _planner_node(self, state: _TaskGraphState) -> _TaskGraphState:
         task = state["task"]
         context = state["context"]
         plan = _normalize_plan(self._planner.plan(context), limits=self._limits)
-        steps = self.store.add_steps(task_id=task.task_id, steps=_records_from_plan(task.task_id, plan))
-        self.store.add_event(task_id=task.task_id, event_type="planned", message=plan.summary or "Plan generated.")
         validation = self._validator.validate(plan, context)
         if not validation.valid:
             message = "; ".join(validation.errors)
             task = self.store.update_task(task.task_id, status="failed", error_message=message, finished=True)
             self.store.add_event(task_id=task.task_id, event_type="failed", message=message)
-            return {**state, "task": task, "plan": plan, "queue": tuple(steps), "route": "fail", "final_answer": message}
+            return {**state, "task": task, "plan": plan, "queue": (), "route": "fail", "final_answer": message}
+        steps = self.store.add_steps(task_id=task.task_id, steps=_records_from_plan(task.task_id, plan))
+        self.store.add_event(task_id=task.task_id, event_type="planned", message=plan.summary or "Plan generated.")
         self.store.add_event(task_id=task.task_id, event_type="validated", message="Plan validated.")
         task = self.store.update_task(task.task_id, status="running")
         return {**state, "task": task, "plan": plan, "queue": tuple(steps), "route": "select_step"}
@@ -502,6 +545,7 @@ class GraphTaskRuntime(TaskRuntime):
 def _build_task_graph(runtime: GraphTaskRuntime) -> _CompiledTaskGraph:
     graph = StateGraph(_TaskGraphState)  # ty: ignore[invalid-argument-type]  # ty cannot verify TypedDicts satisfy LangGraph's StateLike bound
     graph.add_node("context", runtime._build_context_node)
+    graph.add_node("presearch", runtime._presearch_node)
     graph.add_node("planner", runtime._planner_node)
     graph.add_node("select_step", runtime._select_step_node)
     graph.add_node("execute_step", runtime._execute_step_node)
@@ -509,7 +553,8 @@ def _build_task_graph(runtime: GraphTaskRuntime) -> _CompiledTaskGraph:
     graph.add_node("replanner", runtime._replanner_node)
     graph.add_node("answer", runtime._answer_node)
     graph.add_edge(START, "context")
-    graph.add_conditional_edges("context", _route, {"ask_user": END, "plan": "planner"})
+    graph.add_conditional_edges("context", _route, {"ask_user": END, "presearch": "presearch"})
+    graph.add_conditional_edges("presearch", _route, {"plan": "planner"})
     graph.add_conditional_edges("planner", _route, {"select_step": "select_step", "fail": "answer"})
     graph.add_conditional_edges("select_step", _route, {"select_step": "select_step", "execute_step": "execute_step", "answer": "answer"})
     graph.add_edge("execute_step", "observer")

@@ -26,6 +26,8 @@ TaskEventType = Literal[
     "replanned",
     "skipped",
     "failed",
+    "profile_update_failed",
+    "profile_updated",
     "cancelled",
     "finished",
 ]

@@ -242,6 +242,10 @@ apps/web-next/out/
 !apps/web-next/lib/**
 
 libs/deepagents/deepagents/runtime/runtime.env
+backend/scripts/RAGAS/RAGAS.env
 
 # Local learning notes and interview rehearsal material.
-LearningExample/
+start
+helloagents-trip-planner
+
+backend/runtime.env

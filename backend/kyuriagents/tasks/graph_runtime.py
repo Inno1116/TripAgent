@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from kyuriagents.middleware.retrieval import RuntimeContextDefaults
+from kyuriagents.profile import ProfileCandidate, TravelProfileService, normalize_profile_candidate
 from kyuriagents.tasks.evidence import create_evidence_agents
 from kyuriagents.tasks.runtime import (
     ContextBuilder,
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from kyuriagents.server.identity import MessageRecord
 
 _Route = Literal["presearch", "plan", "select_step", "execute_step", "replan", "ask_user", "answer", "fail"]
+_TerminalStatus = Literal["pending", "succeeded", "failed"]
 
 
 class _Model(Protocol):
@@ -70,12 +72,15 @@ class ClarificationDecision:
         question: User-facing follow-up question when input is required.
         reason: Short machine-facing reason for observability.
         normalized_goal: Optional normalized goal used by downstream nodes.
+        profile_candidates: Explicit user-sourced traveler profile changes that
+            may be committed only after successful task completion.
     """
 
     need_user_input: bool = False
     question: str = ""
     reason: str = ""
     normalized_goal: str = ""
+    profile_candidates: tuple[ProfileCandidate, ...] = ()
 
 
 class ClarificationJudge:
@@ -140,6 +145,16 @@ class ClarificationJudge:
             "10. When expanding inherited conditions, keep the current destination/topic authoritative "
             "and write one concise operational sentence suitable for planner and search queries.\n"
             "11. If unsure whether prior context is needed, keep `normalized_goal` close to CURRENT_USER_GOAL.\n\n"
+            "Traveler profile candidate rules:\n"
+            "1. Extract candidates only from explicit statements inside CURRENT_USER_GOAL, including embedded USER CLARIFICATIONS.\n"
+            "2. Never infer preferences from recommendations, tools, prior assistant messages, or the normalized goal itself.\n"
+            "3. Use hard_constraints only for explicit accessibility, health, allergy, dietary, or non-negotiable restrictions.\n"
+            "4. Use dynamic_preferences only for clearly lasting preferences such as `I usually`, `I always`, `I like`, or `from now on`.\n"
+            "5. Use trip_state for this trip, today, the current destination, temporary budget, pace, energy, or current interests.\n"
+            "6. Use history_facts only for facts the user explicitly says have already happened; never store planned recommendations as history.\n"
+            "7. source_text must be an exact quote copied from CURRENT_USER_GOAL. If there is no explicit evidence, return no candidate.\n"
+            "8. Use operation=set to replace one field, append to add unique list values, and remove to revoke a field or listed values.\n"
+            "9. Use scope=current_trip only with trip_state; all other sections use scope=long_term.\n\n"
             "Use RUNTIME_CONSTRAINTS.current_date/current_datetime/timezone as the runtime date context. "
             "Do not infer current dates from model training data.\n\n"
             f"<CURRENT_USER_GOAL>\n{context.goal}\n</CURRENT_USER_GOAL>\n\n"
@@ -147,7 +162,10 @@ class ClarificationJudge:
             f"<RUNTIME_CONSTRAINTS>\n{json.dumps(context.constraints, ensure_ascii=False)}\n</RUNTIME_CONSTRAINTS>\n\n"
             f"<METADATA>\n{json.dumps(context.metadata, ensure_ascii=False)}\n</METADATA>\n\n"
             "Return schema:\n"
-            '{"need_user_input": boolean, "question": string, "reason": string, "normalized_goal": string}'
+            '{"need_user_input": boolean, "question": string, "reason": string, "normalized_goal": string, '
+            '"profile_candidates": [{"section": "hard_constraints|dynamic_preferences|trip_state|history_facts", '
+            '"field": string, "operation": "set|append|remove", "value": any, '
+            '"scope": "long_term|current_trip", "source_text": string}]}'
         )
         result = _invoke_model(model, [SystemMessage(content="Return valid JSON only."), HumanMessage(content=prompt)])
         payload = _json_payload(result)
@@ -169,6 +187,8 @@ class _TaskGraphState(TypedDict, total=False):
     current_step: TaskStepRecord | None
     completed: tuple[TaskStepRecord, ...]
     final_answer: str
+    profile_candidates: tuple[ProfileCandidate, ...]
+    terminal_status: _TerminalStatus
     route: _Route
     run_state: _GraphRunState
     last_error: BaseException | None
@@ -215,6 +235,7 @@ class GraphTaskRuntime(TaskRuntime):
         executor: TaskStepExecutor | None = None,
         observer: Observer | None = None,
         presearcher: TaskPreSearcher | None = None,
+        profile_service: TravelProfileService | None = None,
         limits: TaskRuntimeLimits | None = None,
     ) -> None:
         """Initialize the graph runtime."""
@@ -230,6 +251,7 @@ class GraphTaskRuntime(TaskRuntime):
             limits=limits,
         )
         self._clarification_judge = clarification_judge or ClarificationJudge()
+        self._profile_service = profile_service
         self._graph = _build_task_graph(self)
 
     @classmethod
@@ -257,6 +279,7 @@ class GraphTaskRuntime(TaskRuntime):
             executor=TaskStepExecutor(model_factory=model_factory, tool_executor=tool_executor, evidence_agents=evidence_agents),
             context_builder=ContextBuilder(profile_service=profile_service),
             presearcher=TaskPreSearcher.from_config(config),
+            profile_service=profile_service,
             limits=limits,
         )
 
@@ -276,6 +299,8 @@ class GraphTaskRuntime(TaskRuntime):
             "disabled_tools": tuple(disabled_tools),
             "completed": (),
             "final_answer": "",
+            "profile_candidates": (),
+            "terminal_status": "pending",
             "route": "plan",
             "run_state": _GraphRunState(started_at=time.monotonic()),
             "last_error": None,
@@ -322,6 +347,7 @@ class GraphTaskRuntime(TaskRuntime):
                 payload={"question": question, "reason": decision.reason},
             )
             return {**state, "task": task, "intent": intent, "context": context, "route": "ask_user", "ask_user_question": question}
+        profile_candidates = _user_sourced_profile_candidates(decision.profile_candidates, goal=context.goal)
         if decision.normalized_goal and decision.normalized_goal != context.goal:
             context = TaskContext(
                 goal=decision.normalized_goal,
@@ -334,7 +360,14 @@ class GraphTaskRuntime(TaskRuntime):
                 constraints=context.constraints,
                 metadata={**context.metadata, "original_goal": task.goal},
             )
-        return {**state, "task": task, "intent": intent, "context": context, "route": "presearch"}
+        return {
+            **state,
+            "task": task,
+            "intent": intent,
+            "context": context,
+            "profile_candidates": profile_candidates,
+            "route": "presearch",
+        }
 
     def _presearch_node(self, state: _TaskGraphState) -> _TaskGraphState:
         task = state["task"]
@@ -351,7 +384,15 @@ class GraphTaskRuntime(TaskRuntime):
             message = "; ".join(validation.errors)
             task = self.store.update_task(task.task_id, status="failed", error_message=message, finished=True)
             self.store.add_event(task_id=task.task_id, event_type="failed", message=message)
-            return {**state, "task": task, "plan": plan, "queue": (), "route": "fail", "final_answer": message}
+            return {
+                **state,
+                "task": task,
+                "plan": plan,
+                "queue": (),
+                "route": "fail",
+                "final_answer": message,
+                "terminal_status": "failed",
+            }
         steps = self.store.add_steps(task_id=task.task_id, steps=_records_from_plan(task.task_id, plan))
         self.store.add_event(task_id=task.task_id, event_type="planned", message=plan.summary or "Plan generated.")
         self.store.add_event(task_id=task.task_id, event_type="validated", message="Plan validated.")
@@ -366,7 +407,17 @@ class GraphTaskRuntime(TaskRuntime):
         completed = tuple(step for step in queue if step.status in {"succeeded", "skipped"})
         pending = next((step for step in queue if step.status == "pending"), None)
         if pending is None:
-            return {**state, "queue": queue, "completed": completed, "current_step": None, "route": "answer"}
+            terminal_status: _TerminalStatus = (
+                "succeeded" if any(step.kind == "answer" and step.status == "succeeded" for step in completed) else "failed"
+            )
+            return {
+                **state,
+                "queue": queue,
+                "completed": completed,
+                "current_step": None,
+                "terminal_status": terminal_status,
+                "route": "answer",
+            }
         if _counts_toward_tool_limit(pending) and run_state.tool_calls >= self._limits.max_tool_calls:
             skipped = self._skip_step_for_tool_limit(task=task, step=pending)
             completed = (*completed, skipped)
@@ -377,7 +428,7 @@ class GraphTaskRuntime(TaskRuntime):
         task = state["task"]
         current = state.get("current_step")
         if current is None:
-            return {**state, "route": "answer"}
+            return {**state, "terminal_status": "failed", "route": "answer"}
         run_state = state["run_state"]
         context = state["context"]
         execution_context = TaskExecutionContext(
@@ -406,7 +457,15 @@ class GraphTaskRuntime(TaskRuntime):
         self.store.add_event(task_id=task.task_id, step_id=finished.step_id, event_type="step_finished", message=finished.title)
         completed = (*state.get("completed", ()), finished)
         final_answer = output if finished.kind == "answer" else state.get("final_answer", "")
-        return {**state, "current_step": finished, "completed": completed, "final_answer": final_answer, "last_error": None}
+        terminal_status = "succeeded" if finished.kind == "answer" else state.get("terminal_status", "pending")
+        return {
+            **state,
+            "current_step": finished,
+            "completed": completed,
+            "final_answer": final_answer,
+            "terminal_status": terminal_status,
+            "last_error": None,
+        }
 
     def _observer_node(self, state: _TaskGraphState) -> _TaskGraphState:
         task = state["task"]
@@ -444,7 +503,14 @@ class GraphTaskRuntime(TaskRuntime):
         message = f"Task step failed: {error}"
         failed = self.store.update_step(current.step_id, status="failed", error_message=str(error), finished=True)
         self.store.add_event(task_id=task.task_id, step_id=failed.step_id, event_type="failed", message=message)
-        return {**state, "current_step": failed, "failed_step": failed, "final_answer": message, "route": "answer"}
+        return {
+            **state,
+            "current_step": failed,
+            "failed_step": failed,
+            "final_answer": message,
+            "terminal_status": "failed",
+            "route": "answer",
+        }
 
     def _replanner_node(self, state: _TaskGraphState) -> _TaskGraphState:
         task = state["task"]
@@ -453,7 +519,7 @@ class GraphTaskRuntime(TaskRuntime):
         failed_step = state.get("failed_step") or state.get("current_step")
         error = state.get("last_error")
         if failed_step is None or not isinstance(error, Exception):
-            return {**state, "route": "answer"}
+            return {**state, "terminal_status": "failed", "route": "answer"}
         queue = state.get("queue", ())
         index = _step_index(queue, failed_step.step_id)
         self._skip_remaining(task=task, steps=queue[index + 1 :])
@@ -470,6 +536,7 @@ class GraphTaskRuntime(TaskRuntime):
                 **state,
                 "route": "answer",
                 "final_answer": f"Task failed while replanning: {error}",
+                "terminal_status": "failed",
             }
         return {
             **state,
@@ -487,10 +554,43 @@ class GraphTaskRuntime(TaskRuntime):
         final_answer = (
             state.get("final_answer") or _previous_step_text(state.get("completed", ())) or "Task completed, but no usable result was generated."
         )
-        status = "failed" if state.get("route") == "fail" else "succeeded"
+        status = "succeeded" if state.get("terminal_status") == "succeeded" else "failed"
+        if status == "succeeded":
+            self._commit_profile_candidates(state)
         task = self.store.update_task(task.task_id, status=status, final_answer=final_answer, finished=True)
         self.store.add_event(task_id=task.task_id, event_type="finished", message="Task completed." if status == "succeeded" else "Task failed.")
         return {**state, "task": task, "final_answer": final_answer}
+
+    def _commit_profile_candidates(self, state: _TaskGraphState) -> None:
+        candidates = state.get("profile_candidates", ())
+        if self._profile_service is None or not candidates:
+            return
+        task = state["task"]
+        try:
+            record = self._profile_service.apply_candidates(
+                tenant_id=task.tenant_id,
+                user_id=task.user_id,
+                candidates=candidates,
+            )
+        except Exception as exc:  # noqa: BLE001  # profile persistence must not invalidate a completed task
+            self.store.add_event(
+                task_id=task.task_id,
+                event_type="profile_update_failed",
+                message=f"Traveler profile update failed: {exc}",
+            )
+            return
+        if record is None:
+            return
+        self.store.add_event(
+            task_id=task.task_id,
+            event_type="profile_updated",
+            message="Traveler profile updated from explicit task input.",
+            payload={
+                "profile_version": record.profile_version,
+                "candidate_count": len(candidates),
+                "changes": [_profile_candidate_payload(candidate) for candidate in candidates],
+            },
+        )
 
     def _check_graph_runtime_budget(self, run_state: _GraphRunState) -> None:
         elapsed = time.monotonic() - run_state.started_at
@@ -620,7 +720,48 @@ def _clarification_from_payload(payload: Mapping[str, object], *, fallback_goal:
         question=str(payload.get("question") or "").strip(),
         reason=str(payload.get("reason") or "").strip(),
         normalized_goal=str(payload.get("normalized_goal") or fallback_goal).strip() or fallback_goal,
+        profile_candidates=_profile_candidates_from_payload(payload.get("profile_candidates")),
     )
+
+
+def _profile_candidates_from_payload(value: object) -> tuple[ProfileCandidate, ...]:
+    if not isinstance(value, list):
+        return ()
+    candidates: list[ProfileCandidate] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            candidate = normalize_profile_candidate(item)
+        except ValueError:
+            continue
+        candidates.append(candidate)
+    return tuple(candidates)
+
+
+def _user_sourced_profile_candidates(candidates: Sequence[ProfileCandidate], *, goal: str) -> tuple[ProfileCandidate, ...]:
+    normalized_goal = _normalized_source_text(goal)
+    accepted: list[ProfileCandidate] = []
+    for candidate in candidates:
+        source = _normalized_source_text(candidate.source_text)
+        if source and source in normalized_goal and candidate not in accepted:
+            accepted.append(candidate)
+    return tuple(accepted)
+
+
+def _normalized_source_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _profile_candidate_payload(candidate: ProfileCandidate) -> dict[str, object]:
+    return {
+        "section": candidate.section,
+        "field": candidate.field,
+        "operation": candidate.operation,
+        "value": candidate.value,
+        "scope": candidate.scope,
+        "source_text": candidate.source_text,
+    }
 
 
 __all__ = ["ClarificationDecision", "ClarificationJudge", "GraphTaskRuntime"]
